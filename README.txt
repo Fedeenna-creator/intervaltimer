@@ -1,1 +1,1 @@
-Versione v10. Nuovo buzzer stereo forte da 1,15 secondi, frequenza base 880 Hz con armoniche e segnale compresso. La voce parte dopo il beep per non coprirlo. Il riquadro Fase successiva usa verde, rosso, blu, giallo o grigio in base alla fase. Caricare anche beep.wav nella root GitHub e reinstallare la PWA.
+Versione v11: cinque suoni selezionabili per ogni allenamento, pulsante Ascolta nell editor e salvataggio della scelta. Tutti i WAV sono disponibili offline. Caricare tutti i file nella root GitHub.
