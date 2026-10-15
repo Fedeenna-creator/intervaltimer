@@ -2,18 +2,25 @@ const $=s=>document.querySelector(s),K='it.workouts.v5';let old=JSON.parse(local
 function clearVoice(){voiceQueue=[];voiceBusy=false;speechSynthesis.cancel()}
 function speak(x){voiceQueue.push(x);playVoice()}
 function playVoice(){if(voiceBusy||!voiceQueue.length)return;voiceBusy=true;let u=new SpeechSynthesisUtterance(voiceQueue.shift());u.lang='it-IT';u.rate=.95;u.onend=u.onerror=()=>{voiceBusy=false;playVoice()};speechSynthesis.speak(u)}
-function gong(){let c=audio(),now=c.currentTime;[196,294,392].forEach((f,i)=>{let o=c.createOscillator(),g=c.createGain();o.frequency.value=f;g.gain.setValueAtTime(.16/(i+1),now);g.gain.exponentialRampToValueAtTime(.001,now+1.7);o.connect(g).connect(c.destination);o.start(now);o.stop(now+1.8)})}async function wake(){try{lock=await navigator.wakeLock.request('screen');$('#wake').textContent='Schermo sempre acceso';$('#wake').style.color='#20d65a'}catch{$('#wake').textContent='Schermo sempre acceso non disponibile';$('#wake').style.color='#ffb02e'}}async function release(){try{await lock?.release()}catch{}lock=null}function dur(x=p){return x=='prepare'?a.prep:x=='exercise'?a.work:x=='rest'?a.rest:x=='break'?a.brk:0}function setPhase(x){p=x;left=dur();said.clear();draw()}function openTimer(w){a=w;p=w.prep>0?'prepare':'exercise';round=serie=1;left=dur();hasStarted=false;$('#home').classList.remove('active');$('#timer').classList.add('active');draw()}function run(){audio();wake();if(!hasStarted){hasStarted=true;if(p=='exercise'){gong();speak('Go')}else if(p=='prepare'){speak('Prepara')}}end=Date.now()+left*1000;t=setInterval(tick,100);$('#go').textContent='Pausa'}function tick(){left=Math.max(0,(end-Date.now())/1000);let n=Math.ceil(left);if(n>=1&&n<=3&&!said.has(n)){said.add(n);speak(String(n))}if(left<=0){clearInterval(t);t=null;next()}draw()}function next(){
+function gong(){
+ const c=audio(),now=c.currentTime;
+ const osc=c.createOscillator(),gain=c.createGain();
+ osc.type='square';
+ osc.frequency.setValueAtTime(1050,now);
+ gain.gain.setValueAtTime(0.48,now);
+ gain.gain.setValueAtTime(0.48,now+0.72);
+ gain.gain.exponentialRampToValueAtTime(0.001,now+0.9);
+ osc.connect(gain);gain.connect(c.destination);
+ osc.start(now);osc.stop(now+0.92)
+}
+async function wake(){try{lock=await navigator.wakeLock.request('screen');$('#wake').textContent='Schermo sempre acceso';$('#wake').style.color='#20d65a'}catch{$('#wake').textContent='Schermo sempre acceso non disponibile';$('#wake').style.color='#ffb02e'}}async function release(){try{await lock?.release()}catch{}lock=null}function dur(x=p){return x=='prepare'?a.prep:x=='exercise'?a.work:x=='rest'?a.rest:x=='break'?a.brk:0}function setPhase(x){p=x;left=dur();said.clear();draw()}function openTimer(w){a=w;p=w.prep>0?'prepare':'exercise';round=serie=1;left=dur();hasStarted=false;$('#home').classList.remove('active');$('#timer').classList.add('active');draw()}function run(){audio();wake();if(!hasStarted){hasStarted=true;if(p=='exercise'){gong();speak('Go')}else if(p=='prepare'){speak('Prepara')}}end=Date.now()+left*1000;t=setInterval(tick,100);$('#go').textContent='Pausa'}function tick(){left=Math.max(0,(end-Date.now())/1000);let n=Math.ceil(left);if(n>=1&&n<=3&&!said.has(n)){said.add(n);speak(String(n))}if(left<=0){clearInterval(t);t=null;next()}draw()}function next(){
  if(p=='prepare'){
    setPhase('exercise');gong();speak('Go');
  }else if(p=='exercise'){
    gong();speak('Stop');
-   if(round<a.rounds){
-     setPhase('rest');
-   }else if(serie<a.series){
-     setPhase('break');speak('Riposo tra serie');
-   }else{
-     p='finished';left=0;release();speak('Allenamento completato');draw();return;
-   }
+   if(round<a.rounds){setPhase('rest')}
+   else if(serie<a.series){setPhase('break');speak('Riposo tra serie')}
+   else{p='finished';left=0;release();speak('Allenamento completato');draw();return}
  }else if(p=='rest'){
    round++;setPhase('exercise');gong();speak('Go');
  }else if(p=='break'){
