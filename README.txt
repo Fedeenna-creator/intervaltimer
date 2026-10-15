@@ -1,1 +1,1 @@
-Versione v11: cinque suoni selezionabili per ogni allenamento, pulsante Ascolta nell editor e salvataggio della scelta. Tutti i WAV sono disponibili offline. Caricare tutti i file nella root GitHub.
+v12 corretta, costruita dalla v10: mantiene colori dinamici fase successiva e annunci Prepara/Go/Stop/Riposo tra serie/Allenamento completato. Aggiunge cinque suoni selezionabili e pulsante Ascolta funzionante.
