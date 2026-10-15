@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="IntervalTimer">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <title>IntervalTimer</title>
+</head>
+<body>
+  <main id="app">
+    <header><h1>IntervalTimer</h1><button id="installHelp" class="iconBtn" aria-label="Istruzioni installazione">?</button></header>
+
+    <section id="homeView" class="view active">
+      <div class="tabs">
+        <button class="tab active" data-tab="workouts">Intervalli</button>
+        <button class="tab" data-tab="stopwatch">Cronometro</button>
+      </div>
+      <div id="workoutsPanel">
+        <div class="sectionHead"><h2>Allenamenti</h2><button id="newWorkout" class="addBtn">＋ Nuovo</button></div>
+        <div id="workoutList" class="list"></div>
+      </div>
+      <div id="stopwatchPanel" hidden>
+        <div class="stopwatchCard">
+          <div class="eyebrow">CRONOMETRO</div>
+          <div id="stopwatchTime" class="stopwatchTime">00:00.00</div>
+          <div class="actions"><button id="stopwatchStart" class="primary green">Avvia</button><button id="stopwatchReset" class="secondary">Reset</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="timerView" class="view">
+      <button id="backHome" class="back">‹ Allenamenti</button>
+      <div class="timerWrap">
+        <h2 id="timerName"></h2>
+        <div id="phaseText" class="phase">PRONTO</div>
+        <div id="ring" class="ring"><div id="timerTime" class="timerTime">00:20</div></div>
+        <div id="counter" class="counter"></div>
+        <div class="actions"><button id="timerStart" class="primary green">Avvia</button><button id="timerReset" class="secondary">Reset</button></div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="editorDialog">
+    <form id="workoutForm" method="dialog">
+      <h2 id="editorTitle">Nuovo allenamento</h2>
+      <input id="workoutId" type="hidden">
+      <label>Nome<input id="name" required maxlength="30" placeholder="Es. HIIT mattina"></label>
+      <div class="grid">
+        <label>Esercizio (sec)<input id="work" type="number" min="1" max="3600" value="30" required></label>
+        <label>Riposo (sec)<input id="rest" type="number" min="0" max="3600" value="15" required></label>
+        <label>Round per serie<input id="rounds" type="number" min="1" max="99" value="8" required></label>
+        <label>Numero serie<input id="series" type="number" min="1" max="99" value="1" required></label>
+        <label class="wide">Pausa tra serie (sec)<input id="seriesBreak" type="number" min="0" max="3600" value="60" required></label>
+      </div>
+      <div class="legend"><span class="g"></span>Esercizio <span class="r"></span>Riposo <span class="b"></span>Tra le serie</div>
+      <div class="dialogActions"><button type="button" id="cancelEditor" class="secondary">Annulla</button><button type="submit" class="primary green">Salva</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="helpDialog">
+    <div class="help"><h2>Installa su iPhone</h2><ol><li>Apri questa pagina in Safari.</li><li>Tocca il pulsante Condividi.</li><li>Scegli “Aggiungi alla schermata Home”.</li><li>Tocca “Aggiungi”.</li></ol><p>Per l'uso offline, la pagina deve essere pubblicata su un sito HTTPS.</p><button id="closeHelp" class="primary green">Chiudi</button></div>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>
