@@ -1,1 +1,11 @@
-v12 corretta, costruita dalla v10: mantiene colori dinamici fase successiva e annunci Prepara/Go/Stop/Riposo tra serie/Allenamento completato. Aggiunge cinque suoni selezionabili e pulsante Ascolta funzionante.
+IntervalTimer v13
+
+Correzione audio iPhone:
+- eliminata la riproduzione dei file WAV tramite new Audio();
+- i cinque suoni sono ora sintetizzati con un unico Web AudioContext a volume controllato;
+- annunci vocali disattivati per impostazione predefinita, poiche speechSynthesis puo interrompere Spotify o Apple Music su iOS;
+- aggiunta opzione Annunci vocali per ogni allenamento;
+- cache PWA aggiornata a intervaltimer-v13;
+- mantenute le funzioni della v12: allenamenti multipli, colori fase, countdown, cronometro, wake lock e uso offline.
+
+Installazione: sostituire tutti i file sul server. Su iPhone chiudere la PWA, riaprirla online una volta e, se resta la versione vecchia, rimuoverla dalla schermata Home e aggiungerla nuovamente da Safari.
