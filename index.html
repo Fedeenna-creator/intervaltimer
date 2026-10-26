@@ -23,7 +23,7 @@
     .phase{font-size:clamp(18px,5vw,27px);font-weight:900;letter-spacing:1.5px}.bigTime{font-size:clamp(92px,28vw,158px);line-height:.95;font-weight:900;letter-spacing:-6px;font-variant-numeric:tabular-nums;text-shadow:0 3px 18px #0004}.workoutName{font-size:20px;font-weight:750;margin-bottom:10px}.progress{font-size:14px;font-weight:700;margin-top:14px;opacity:.82}
     .lower{height:50dvh;min-height:320px;background:#080808;padding:18px 20px calc(env(safe-area-inset-bottom) + 16px);display:flex;flex-direction:column;justify-content:space-between;gap:10px}.nextBox{background:#171717;border:1px solid var(--line);border-radius:18px;padding:14px;text-align:center}.nextLabel{color:#aaa;font-size:12px;font-weight:800;letter-spacing:1px}.nextPhase{font-size:22px;font-weight:900;margin-top:4px}.nextTime{font-size:40px;font-weight:850;font-variant-numeric:tabular-nums}.nextBox.next-exercise{background:#146c34;border-color:#20d65a}.nextBox.next-rest{background:#7b1d19;border-color:#ff5148}.nextBox.next-break{background:#075693;border-color:#168fff}.nextBox.next-finished{background:#252525;border-color:#555}
     .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}.stat{background:var(--panel);border-radius:16px;padding:11px;text-align:center}.stat strong{display:block;font-size:29px}.stat span,.status{color:#999;font-size:12px}.status{text-align:center;min-height:16px}.back{position:absolute;top:calc(env(safe-area-inset-top) + 10px);left:12px;background:#0005;z-index:2}.center{text-align:center;padding-top:10vh}.swtime{font-size:clamp(48px,15vw,72px);font-weight:850;margin:30px 0;font-variant-numeric:tabular-nums}
-    dialog{background:#111;color:#fff;border:1px solid #333;border-radius:18px;width:min(94vw,520px);max-height:90dvh;overflow:auto;padding:18px}dialog::backdrop{background:#000b}dialog h2{margin-top:0}label{display:block;color:#bbb;margin:10px 0;font-size:14px}input,select{display:block;width:100%;padding:12px;margin-top:5px;background:#222;color:#fff;border:1px solid #444;border-radius:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}.check{display:flex;align-items:center;gap:9px;background:#191919;padding:12px;border-radius:10px}.check input{width:auto;margin:0}.note{display:block;color:#999;line-height:1.4;margin:8px 0 14px}.dialog-actions{position:sticky;bottom:-18px;background:#111;padding:12px 0 18px}
+    dialog{background:#111;color:#fff;border:1px solid #333;border-radius:18px;width:min(94vw,520px);max-height:90dvh;overflow:auto;padding:18px}dialog::backdrop{background:#000b}dialog h2{margin-top:0}label{display:block;color:#bbb;margin:10px 0;font-size:14px}input,select{display:block;width:100%;padding:12px;margin-top:5px;background:#222;color:#fff;border:1px solid #444;border-radius:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}.check{display:flex;align-items:center;gap:9px;background:#191919;padding:12px;border-radius:10px}.check input{width:auto;margin:0}.note{display:block;color:#999;line-height:1.4;margin:8px 0 14px}.dialog-actions{position:sticky;bottom:-18px;background:#111;padding:12px 0 18px}.audio-bank{position:fixed;left:0;bottom:0;width:1px;height:1px;overflow:hidden;opacity:.01;pointer-events:none;z-index:-1}.audio-bank audio{display:block;width:1px;height:1px}
     @media(max-width:390px){.grid{grid-template-columns:1fr}.row{flex-wrap:wrap}.row .play{flex-basis:100%}}
     @media(max-height:720px){.current,.lower{min-height:300px}.bigTime{font-size:88px}.nextTime{font-size:34px}.lower{padding-top:12px}.progress{margin-top:8px}}
   </style>
@@ -31,7 +31,7 @@
 <body>
 <main>
   <section id="home" class="view active home">
-    <div class="head"><h1>IntervalTimer</h1><span class="version">v15.2</span></div>
+    <div class="head"><h1>IntervalTimer</h1><span class="version">v15.3</span></div>
     <div class="tabs" role="tablist"><button id="tabI" class="active" role="tab">Intervalli</button><button id="tabS" role="tab">Cronometro</button></div>
     <div id="intervals"><p><button id="new" class="green">＋ Nuovo allenamento</button></p><div id="list"></div></div>
     <div id="stopwatch" hidden class="center"><h2>CRONOMETRO</h2><div id="swtime" class="swtime">00:00.00</div><div class="actions"><button id="swgo" class="green">Avvia</button><button id="swreset">Reset</button></div></div>
@@ -66,19 +66,19 @@
       <label>Volume<select id="volume"><option value="0.45">Medio</option><option value="0.72" selected>Forte</option><option value="1">Massimo</option></select></label>
     </div>
     <button type="button" id="previewSound" style="width:100%;margin:4px 0 10px">▶ Ascolta il suono</button>
-    <div id="audioStatus" class="status" aria-live="polite">Tocca “Ascolta il suono”: la riproduzione parte immediatamente</div>
+    <div id="audioStatus" class="status" aria-live="polite">Tocca “Ascolta il suono” per verificare il player</div>
     <label class="check"><input id="voice" type="checkbox"> Annunci vocali e countdown 3–2–1</label>
     <small class="note">I cinque segnali audio sono inclusi nell’app e vengono sbloccati con un tocco, come richiesto da iPhone/Safari. Gli annunci vocali restano disattivati per impostazione predefinita perché possono abbassare o interrompere la musica.</small>
     <div class="actions dialog-actions"><button type="button" id="cancel">Annulla</button><button class="green" type="submit">Salva</button></div>
   </form>
 </dialog>
-<div hidden aria-hidden="true">
+<div class="audio-bank" aria-hidden="true">
   <audio id="audio-gym" preload="auto" playsinline src="./sound-gym.wav"></audio>
   <audio id="audio-electronic" preload="auto" playsinline src="./sound-electronic.wav"></audio>
   <audio id="audio-horn" preload="auto" playsinline src="./sound-horn.wav"></audio>
   <audio id="audio-military" preload="auto" playsinline src="./sound-military.wav"></audio>
   <audio id="audio-industrial" preload="auto" playsinline src="./sound-industrial.wav"></audio>
 </div>
-<script src="./app.js?v=15.2"></script>
+<script src="./app.js?v=15.3"></script>
 </body>
 </html>

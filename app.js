@@ -136,18 +136,23 @@ function setAudioStatus(message,ok=true){
 
 function configureShortSoundSession(){
   try{
-    // "transient" è pensato per notifiche brevi e normalmente si sovrappone agli altri audio.
-    if(navigator.audioSession && 'type' in navigator.audioSession) navigator.audioSession.type='transient';
-  }catch(error){ console.debug('Audio Session API non disponibile',error); }
+    // “transient” è destinato ai segnali brevi e favorisce la sovrapposizione alla musica.
+    if(navigator.audioSession&&'type' in navigator.audioSession) navigator.audioSession.type='transient';
+  }catch(error){console.debug('Audio Session API non disponibile',error);}
 }
 
 function playerFor(key){
   const player=document.querySelector(`#audio-${key}`);
-  if(!player) throw new Error(`Player audio mancante: audio-${key}`);
+  if(!player) throw new Error(`Elemento #audio-${key} non trovato`);
   const expected=SOUND_URLS[key];
+  if(!expected) throw new Error(`Suono sconosciuto: ${key}`);
   if(player.src!==expected) player.src=expected;
   player.preload='auto';
   player.playsInline=true;
+  player.defaultMuted=false;
+  player.muted=false;
+  player.loop=false;
+  player.playbackRate=1;
   player.setAttribute('playsinline','');
   player.setAttribute('webkit-playsinline','');
   return player;
@@ -162,6 +167,13 @@ function stopOtherPlayers(except=null){
   }
 }
 
+function mediaErrorText(player){
+  const error=player.error;
+  if(!error) return `nessun MediaError (readyState=${player.readyState}, networkState=${player.networkState}, paused=${player.paused}, currentTime=${Number(player.currentTime||0).toFixed(3)})`;
+  const labels={1:'MEDIA_ERR_ABORTED',2:'MEDIA_ERR_NETWORK',3:'MEDIA_ERR_DECODE',4:'MEDIA_ERR_SRC_NOT_SUPPORTED'};
+  return `${labels[error.code]||`MediaError ${error.code}`}${error.message?`: ${error.message}`:''}`;
+}
+
 function getAudioContext(){
   if(audioContext) return audioContext;
   const AudioCtx=window.AudioContext||window.webkitAudioContext;
@@ -172,10 +184,7 @@ function getAudioContext(){
     webAudioGain.gain.value=1;
     webAudioGain.connect(audioContext.destination);
     return audioContext;
-  }catch(error){
-    console.warn('Creazione AudioContext non riuscita',error);
-    return null;
-  }
+  }catch(error){console.warn('Creazione AudioContext non riuscita',error);return null;}
 }
 
 function silentWebAudioPulse(context){
@@ -183,10 +192,18 @@ function silentWebAudioPulse(context){
   try{
     const buffer=context.createBuffer(1,1,context.sampleRate||44100);
     const source=context.createBufferSource();
-    source.buffer=buffer;
-    source.connect(context.destination);
-    source.start(0);
+    source.buffer=buffer;source.connect(context.destination);source.start(0);
   }catch(error){console.debug('Silent pulse non disponibile',error);}
+}
+
+function activateWebAudioFromGesture(){
+  configureShortSoundSession();
+  const context=getAudioContext();
+  if(!context) return Promise.reject(new Error('Web Audio API non disponibile'));
+  silentWebAudioPulse(context);
+  const resume=context.state==='suspended'?context.resume():Promise.resolve();
+  resume.then(()=>{audioUnlocked=context.state==='running';silentWebAudioPulse(context);}).catch(error=>console.warn('AudioContext.resume() non riuscito',error));
+  return resume;
 }
 
 function decodeAudio(context,arrayBuffer){
@@ -202,13 +219,13 @@ function decodeAudio(context,arrayBuffer){
 }
 
 async function preloadSoundFiles(){
-  // I percorsi sono assoluti rispetto a document.baseURI: funzionano anche in un repository GitHub Pages sotto-cartella.
   await Promise.all(Object.entries(SOUND_URLS).map(async([key,url])=>{
+    const player=playerFor(key);
+    player.load();
     try{
       const response=await fetch(url,{cache:'force-cache'});
       if(!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       rawSoundData.set(key,await response.arrayBuffer());
-      playerFor(key).load();
     }catch(error){console.warn(`Precaricamento ${SOUND_FILES[key]} non riuscito`,error);}
   }));
 }
@@ -216,85 +233,114 @@ async function preloadSoundFiles(){
 async function ensureSoundBuffer(key){
   if(soundBuffers.has(key)) return soundBuffers.get(key);
   const context=getAudioContext();
-  if(!context) return null;
+  if(!context) throw new Error('Web Audio API non disponibile');
   if(!rawSoundData.has(key)){
     const response=await fetch(SOUND_URLS[key],{cache:'reload'});
     if(!response.ok) throw new Error(`${SOUND_FILES[key]}: HTTP ${response.status}`);
     rawSoundData.set(key,await response.arrayBuffer());
   }
-  const decoded=await decodeAudio(context,rawSoundData.get(key));
-  soundBuffers.set(key,decoded);
-  return decoded;
+  const buffer=await decodeAudio(context,rawSoundData.get(key));
+  if(!buffer||!buffer.duration) throw new Error(`Decodifica vuota per ${SOUND_FILES[key]}`);
+  soundBuffers.set(key,buffer);
+  return buffer;
 }
 
-function unlockWebAudioFromGesture(){
-  configureShortSoundSession();
-  const context=getAudioContext();
-  if(!context) return Promise.resolve(false);
-  silentWebAudioPulse(context);
-  const promise=context.state==='suspended'?context.resume():Promise.resolve();
-  promise.then(()=>{audioUnlocked=context.state==='running';silentWebAudioPulse(context);}).catch(error=>console.warn('Resume AudioContext non riuscito',error));
-  return promise;
+function waitForActualPlayback(player,timeoutMs=1800){
+  let cancel=()=>{};
+  const promise=new Promise((resolve,reject)=>{
+    let settled=false;
+    const cleanup=()=>{
+      clearTimeout(timer);
+      player.removeEventListener('playing',onPlaying);
+      player.removeEventListener('timeupdate',onTimeUpdate);
+      player.removeEventListener('error',onError);
+      player.removeEventListener('abort',onAbort);
+    };
+    const success=event=>{if(settled)return;settled=true;cleanup();resolve(event.type)};
+    const failure=error=>{if(settled)return;settled=true;cleanup();reject(error)};
+    const onPlaying=event=>success(event);
+    const onTimeUpdate=event=>{if(!player.paused&&Number(player.currentTime)>0.015)success(event)};
+    const onError=()=>failure(new Error(mediaErrorText(player)));
+    const onAbort=()=>failure(new Error(`riproduzione interrotta: ${mediaErrorText(player)}`));
+    player.addEventListener('playing',onPlaying,{once:true});
+    player.addEventListener('timeupdate',onTimeUpdate);
+    player.addEventListener('error',onError,{once:true});
+    player.addEventListener('abort',onAbort,{once:true});
+    const timer=setTimeout(()=>failure(new Error(`timeout attesa evento playing: ${mediaErrorText(player)}`)),timeoutMs);
+    cancel=()=>{if(!settled){settled=true;cleanup();}};
+  });
+  return {promise,cancel};
 }
 
-function playWebAudioFallback(key,volume){
-  const context=getAudioContext();
-  if(!context) return Promise.resolve(false);
-  const resume=context.state==='suspended'?context.resume():Promise.resolve();
-  return resume.then(()=>ensureSoundBuffer(key)).then(buffer=>{
-    if(!buffer||context.state!=='running') return false;
-    const source=context.createBufferSource();
-    const gain=context.createGain();
-    gain.gain.value=Math.max(.05,Math.min(1,Number(volume)||.72));
-    source.buffer=buffer;
-    source.connect(gain).connect(webAudioGain);
-    source.addEventListener?.('ended',()=>activeSoundSources.delete(source));
-    activeSoundSources.add(source);
-    source.start(0);
-    return true;
-  }).catch(error=>{console.warn('Fallback Web Audio non riuscito',error);return false;});
-}
-
-function playCue(key=active?.sound||'gym',volume=active?.volume||.72,{fromGesture=false}={}){
-  configureShortSoundSession();
+async function playHtmlCue(key,volume){
   const player=playerFor(key);
   selectedTimerPlayer=player;
   stopOtherPlayers(player);
   const level=Math.max(.05,Math.min(1,Number(volume)||.72));
+  player.pause();
+  player.muted=false;
+  player.defaultMuted=false;
+  player.volume=level;
+  player.playbackRate=1;
+  player.loop=false;
+  try{player.currentTime=0;}catch(error){console.debug('Reset currentTime rimandato',error);}
+  const actualPlayback=waitForActualPlayback(player);
+  let playPromise;
   try{
-    player.muted=false;
-    player.volume=level;
-    player.currentTime=0;
-    // Per l'anteprima questa play() avviene PRIMA di qualsiasi await, direttamente nel click utente.
-    const promise=player.play();
-    if(!promise||typeof promise.then!=='function'){
-      audioUnlocked=true;
-      setAudioStatus(`Riproduzione: ${soundLabel(key)} (HTMLAudio)`);
-      if(navigator.vibrate) navigator.vibrate(50);
-      return Promise.resolve(true);
-    }
-    return promise.then(()=>{
-      audioUnlocked=true;
-      setAudioStatus(`Riproduzione: ${soundLabel(key)} (HTMLAudio)`);
+    // Deve essere eseguita prima del primo await: nel pulsante anteprima è ancora dentro la gesture utente.
+    playPromise=player.play();
+  }catch(error){
+    throw new Error(`${error.name||'Errore play sincrono'}: ${error.message||error}`);
+  }
+  try{
+    if(playPromise&&typeof playPromise.then==='function') await playPromise;
+    const evidence=await actualPlayback.promise;
+    audioUnlocked=true;
+    return {player,evidence};
+  }catch(error){
+    actualPlayback.cancel();
+    try{player.pause();}catch{}
+    throw new Error(`${error.name||'HTMLAudioError'}: ${error.message||error}`);
+  }
+}
+
+async function playWebAudioFallback(key,volume){
+  configureShortSoundSession();
+  const context=getAudioContext();
+  if(!context) throw new Error('Web Audio API non disponibile');
+  if(context.state==='suspended') await context.resume();
+  if(context.state!=='running') throw new Error(`AudioContext non attivo: ${context.state}`);
+  const buffer=await ensureSoundBuffer(key);
+  const source=context.createBufferSource();
+  const gain=context.createGain();
+  gain.gain.value=Math.max(.12,Math.min(1.15,Number(volume)||.72));
+  source.buffer=buffer;
+  source.connect(gain).connect(webAudioGain);
+  source.addEventListener?.('ended',()=>activeSoundSources.delete(source));
+  activeSoundSources.add(source);
+  source.start(0);
+  return true;
+}
+
+async function playCue(key=active?.sound||'gym',volume=active?.volume||.72,{preview=false}={}){
+  configureShortSoundSession();
+  try{
+    const result=await playHtmlCue(key,volume);
+    if(preview) setAudioStatus(`Suono avviato: ${soundLabel(key)} (${result.evidence})`);
+    if(navigator.vibrate) navigator.vibrate(50);
+    return true;
+  }catch(htmlError){
+    console.warn(`HTMLAudio non riuscito per ${SOUND_FILES[key]}`,htmlError);
+    try{
+      await playWebAudioFallback(key,volume);
+      if(preview) setAudioStatus(`HTMLAudio: ${htmlError.message}. Fallback Web Audio avviato.`);
       if(navigator.vibrate) navigator.vibrate(50);
       return true;
-    }).catch(async error=>{
-      console.warn(`HTMLAudio play() non riuscito per ${SOUND_FILES[key]}`,error);
-      const fallback=await playWebAudioFallback(key,level);
-      if(fallback){
-        setAudioStatus(`Riproduzione: ${soundLabel(key)} (Web Audio)`);
-        if(navigator.vibrate) navigator.vibrate(50);
-        return true;
-      }
-      setAudioStatus(`Audio non avviato: ${error?.name||'errore iOS'}. Tocca nuovamente.`,false);
+    }catch(webError){
+      console.error('Anche il fallback Web Audio non è riuscito',webError);
+      if(preview) setAudioStatus(`Errore HTMLAudio: ${htmlError.message} | Errore Web Audio: ${webError.message}`,false);
       return false;
-    });
-  }catch(error){
-    console.warn('Errore sincrono HTMLAudio',error);
-    return playWebAudioFallback(key,level).then(ok=>{
-      setAudioStatus(ok?`Riproduzione: ${soundLabel(key)} (Web Audio)`:'Audio non disponibile',ok);
-      return ok;
-    });
+    }
   }
 }
 
@@ -316,12 +362,13 @@ function stopAudioKeepAlive(){
   audioKeepAlive=null;
 }
 
-$('#previewSound').addEventListener('click',()=>{
+$('#previewSound').addEventListener('click',async()=>{
   const key=$('#sound').value;
   const volume=Number($('#volume').value);
-  // Nessun await prima di playCue: conserva la user activation di Safari/iOS.
-  unlockWebAudioFromGesture();
-  playCue(key,volume,{fromGesture:true});
+  setAudioStatus(`Avvio ${soundLabel(key)}…`);
+  // resume() e play() vengono avviati nello stesso click; playCue attende sia play() sia l'evento playing/timeupdate.
+  activateWebAudioFromGesture().catch(error=>console.warn('Pre-attivazione Web Audio non riuscita',error));
+  await playCue(key,volume,{preview:true});
 });
 
 function clearVoice(){
@@ -437,12 +484,12 @@ $('#go').addEventListener('click',()=>{
     secondsLeft=Math.max(0,(phaseEnd-Date.now())/1000); clearInterval(timerId); timerId=null; $('#go').textContent='Riprendi';
   }else{
     // Sblocco sincrono; run() riproduce subito il primo cue nello stesso gesto dell'utente.
-    unlockWebAudioFromGesture();
+    activateWebAudioFromGesture().catch(error=>console.warn('Attivazione Web Audio non riuscita',error));
     run();
   }
 });
 function resetTimer(){
-  clearInterval(timerId); timerId=null; clearVoice(); stopAudioKeepAlive(); releaseWakeLock(); phase=active.prep>0?'prepare':'exercise'; round=1; series=1; secondsLeft=phaseDuration(); started=false; announced.clear(); $('#go').disabled=false; $('#go').textContent='Avvia'; $('#wake').textContent='Schermo attivo: da avviare'; $('#wake').style.color=''; draw();
+  clearInterval(timerId); timerId=null; clearVoice(); stopOtherPlayers(); stopAudioKeepAlive(); releaseWakeLock(); phase=active.prep>0?'prepare':'exercise'; round=1; series=1; secondsLeft=phaseDuration(); started=false; announced.clear(); $('#go').disabled=false; $('#go').textContent='Avvia'; $('#wake').textContent='Schermo attivo: da avviare'; $('#wake').style.color=''; draw();
 }
 $('#reset').addEventListener('click',resetTimer);
 $('#back').addEventListener('click',()=>{ resetTimer(); active=null; $('#timer').classList.remove('active'); $('#home').classList.add('active'); });
@@ -472,4 +519,4 @@ $('#swgo').addEventListener('click',()=>{
 $('#swreset').addEventListener('click',()=>{ clearInterval(stopwatchId); stopwatchId=null; stopwatchElapsed=0; $('#swgo').textContent='Avvia'; drawStopwatch(); });
 
 save(); render(); preloadSoundFiles();
-if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=15.2').catch(console.warn)); }
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=15.3').catch(console.warn)); }
