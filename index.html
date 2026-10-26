@@ -31,7 +31,7 @@
 <body>
 <main>
   <section id="home" class="view active home">
-    <div class="head"><h1>IntervalTimer</h1><span class="version">v15.1</span></div>
+    <div class="head"><h1>IntervalTimer</h1><span class="version">v15.2</span></div>
     <div class="tabs" role="tablist"><button id="tabI" class="active" role="tab">Intervalli</button><button id="tabS" role="tab">Cronometro</button></div>
     <div id="intervals"><p><button id="new" class="green">＋ Nuovo allenamento</button></p><div id="list"></div></div>
     <div id="stopwatch" hidden class="center"><h2>CRONOMETRO</h2><div id="swtime" class="swtime">00:00.00</div><div class="actions"><button id="swgo" class="green">Avvia</button><button id="swreset">Reset</button></div></div>
@@ -66,12 +66,19 @@
       <label>Volume<select id="volume"><option value="0.45">Medio</option><option value="0.72" selected>Forte</option><option value="1">Massimo</option></select></label>
     </div>
     <button type="button" id="previewSound" style="width:100%;margin:4px 0 10px">▶ Ascolta il suono</button>
-    <div id="audioStatus" class="status" aria-live="polite">Tocca “Ascolta il suono” per attivare l’audio su iPhone</div>
+    <div id="audioStatus" class="status" aria-live="polite">Tocca “Ascolta il suono”: la riproduzione parte immediatamente</div>
     <label class="check"><input id="voice" type="checkbox"> Annunci vocali e countdown 3–2–1</label>
     <small class="note">I cinque segnali audio sono inclusi nell’app e vengono sbloccati con un tocco, come richiesto da iPhone/Safari. Gli annunci vocali restano disattivati per impostazione predefinita perché possono abbassare o interrompere la musica.</small>
     <div class="actions dialog-actions"><button type="button" id="cancel">Annulla</button><button class="green" type="submit">Salva</button></div>
   </form>
 </dialog>
-<script src="app.js"></script>
+<div hidden aria-hidden="true">
+  <audio id="audio-gym" preload="auto" playsinline src="./sound-gym.wav"></audio>
+  <audio id="audio-electronic" preload="auto" playsinline src="./sound-electronic.wav"></audio>
+  <audio id="audio-horn" preload="auto" playsinline src="./sound-horn.wav"></audio>
+  <audio id="audio-military" preload="auto" playsinline src="./sound-military.wav"></audio>
+  <audio id="audio-industrial" preload="auto" playsinline src="./sound-industrial.wav"></audio>
+</div>
+<script src="./app.js?v=15.2"></script>
 </body>
 </html>

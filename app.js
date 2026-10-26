@@ -31,22 +31,23 @@ let phaseEnd = 0;
 let timerId = null;
 let wakeLock = null;
 let audioContext = null;
-let masterGain = null;
+let webAudioGain = null;
 let audioKeepAlive = null;
-let fallbackAudio = null;
-let fallbackPrimed = false;
-let fallbackPrimePromise = null;
-let audioUnlockPromise = null;
+let selectedTimerPlayer = null;
+let audioUnlocked = false;
 const soundBuffers = new Map();
 const rawSoundData = new Map();
 const activeSoundSources = new Set();
-const SOUND_FILES = {
+const SOUND_FILES = Object.freeze({
   gym:'sound-gym.wav',
   electronic:'sound-electronic.wav',
   horn:'sound-horn.wav',
   military:'sound-military.wav',
   industrial:'sound-industrial.wav'
-};
+});
+const SOUND_URLS = Object.freeze(Object.fromEntries(
+  Object.entries(SOUND_FILES).map(([key,file])=>[key,new URL(`./${file}`,document.baseURI).href])
+));
 let announced = new Set();
 let started = false;
 let voiceTimeouts = [];
@@ -133,10 +134,32 @@ function setAudioStatus(message,ok=true){
   element.style.color=ok?'#20d65a':'#ffb02e';
 }
 
-function configureAmbientAudio(){
+function configureShortSoundSession(){
   try{
-    if(navigator.audioSession && 'type' in navigator.audioSession) navigator.audioSession.type='ambient';
-  }catch(error){ console.debug('Audio session ambient non disponibile',error); }
+    // "transient" è pensato per notifiche brevi e normalmente si sovrappone agli altri audio.
+    if(navigator.audioSession && 'type' in navigator.audioSession) navigator.audioSession.type='transient';
+  }catch(error){ console.debug('Audio Session API non disponibile',error); }
+}
+
+function playerFor(key){
+  const player=document.querySelector(`#audio-${key}`);
+  if(!player) throw new Error(`Player audio mancante: audio-${key}`);
+  const expected=SOUND_URLS[key];
+  if(player.src!==expected) player.src=expected;
+  player.preload='auto';
+  player.playsInline=true;
+  player.setAttribute('playsinline','');
+  player.setAttribute('webkit-playsinline','');
+  return player;
+}
+
+function stopOtherPlayers(except=null){
+  for(const key of Object.keys(SOUND_FILES)){
+    const player=playerFor(key);
+    if(player!==except){
+      try{player.pause();player.currentTime=0;}catch{}
+    }
+  }
 }
 
 function getAudioContext(){
@@ -144,58 +167,26 @@ function getAudioContext(){
   const AudioCtx=window.AudioContext||window.webkitAudioContext;
   if(!AudioCtx) return null;
   try{
-    // Nessuna opzione nel costruttore: maggiore compatibilità con le versioni di Safari/iOS.
     audioContext=new AudioCtx();
-    masterGain=audioContext.createGain();
-    masterGain.gain.value=.72;
-    masterGain.connect(audioContext.destination);
-    audioContext.addEventListener?.('statechange',()=>{
-      if(audioContext.state==='running') setAudioStatus('Audio pronto');
-    });
+    webAudioGain=audioContext.createGain();
+    webAudioGain.gain.value=1;
+    webAudioGain.connect(audioContext.destination);
     return audioContext;
   }catch(error){
-    console.warn('Web Audio non disponibile',error);
+    console.warn('Creazione AudioContext non riuscita',error);
     return null;
   }
 }
 
-function getFallbackAudio(){
-  if(fallbackAudio) return fallbackAudio;
-  fallbackAudio=new Audio();
-  fallbackAudio.preload='auto';
-  fallbackAudio.playsInline=true;
-  fallbackAudio.setAttribute('playsinline','');
-  fallbackAudio.setAttribute('webkit-playsinline','');
-  return fallbackAudio;
-}
-
-function primeFallbackAudio(){
-  if(fallbackPrimed) return Promise.resolve();
-  if(fallbackPrimePromise) return fallbackPrimePromise;
-  const player=getFallbackAudio();
-  player.src='silence.wav';
-  player.volume=.01;
-  player.load();
-  const attempt=player.play();
-  if(!attempt){ fallbackPrimed=true; return Promise.resolve(); }
-  fallbackPrimePromise=attempt.then(()=>{
-    fallbackPrimed=true;
-    player.pause();
-    player.currentTime=0;
-  }).catch(error=>{
-    console.debug('Sblocco audio HTML rimandato',error);
-  }).finally(()=>{fallbackPrimePromise=null;});
-  return fallbackPrimePromise;
-}
-
-function createSilentPulse(context){
+function silentWebAudioPulse(context){
+  if(!context) return;
   try{
-    const buffer=context.createBuffer(1,1,22050);
+    const buffer=context.createBuffer(1,1,context.sampleRate||44100);
     const source=context.createBufferSource();
     source.buffer=buffer;
     source.connect(context.destination);
     source.start(0);
-  }catch(error){ console.debug('Silent pulse non disponibile',error); }
+  }catch(error){console.debug('Silent pulse non disponibile',error);}
 }
 
 function decodeAudio(context,arrayBuffer){
@@ -206,17 +197,19 @@ function decodeAudio(context,arrayBuffer){
     try{
       const result=context.decodeAudioData(arrayBuffer.slice(0),ok,fail);
       if(result&&typeof result.then==='function') result.then(ok,fail);
-    }catch(error){ fail(error); }
+    }catch(error){fail(error);}
   });
 }
 
 async function preloadSoundFiles(){
-  await Promise.all(Object.entries(SOUND_FILES).map(async([key,file])=>{
+  // I percorsi sono assoluti rispetto a document.baseURI: funzionano anche in un repository GitHub Pages sotto-cartella.
+  await Promise.all(Object.entries(SOUND_URLS).map(async([key,url])=>{
     try{
-      const response=await fetch(file,{cache:'force-cache'});
+      const response=await fetch(url,{cache:'force-cache'});
       if(!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       rawSoundData.set(key,await response.arrayBuffer());
-    }catch(error){ console.warn(`Precaricamento ${file} non riuscito`,error); }
+      playerFor(key).load();
+    }catch(error){console.warn(`Precaricamento ${SOUND_FILES[key]} non riuscito`,error);}
   }));
 }
 
@@ -225,38 +218,84 @@ async function ensureSoundBuffer(key){
   const context=getAudioContext();
   if(!context) return null;
   if(!rawSoundData.has(key)){
-    const response=await fetch(SOUND_FILES[key],{cache:'force-cache'});
-    if(!response.ok) throw new Error(`Audio ${key} non disponibile`);
+    const response=await fetch(SOUND_URLS[key],{cache:'reload'});
+    if(!response.ok) throw new Error(`${SOUND_FILES[key]}: HTTP ${response.status}`);
     rawSoundData.set(key,await response.arrayBuffer());
   }
-  const buffer=await decodeAudio(context,rawSoundData.get(key));
-  soundBuffers.set(key,buffer);
-  return buffer;
+  const decoded=await decodeAudio(context,rawSoundData.get(key));
+  soundBuffers.set(key,decoded);
+  return decoded;
 }
 
-function decodeAllSounds(){
-  return Promise.all(Object.keys(SOUND_FILES).map(key=>ensureSoundBuffer(key).catch(error=>{
-    console.warn(`Decodifica ${key} non riuscita`,error);
-    return null;
-  })));
-}
-
-function unlockAudioFromGesture(){
-  configureAmbientAudio();
+function unlockWebAudioFromGesture(){
+  configureShortSoundSession();
   const context=getAudioContext();
-  // play() e resume() vengono invocati subito nel gesto dell'utente: requisito di iOS/Safari.
-  const fallbackPromise=primeFallbackAudio();
-  if(!context){
-    audioUnlockPromise=fallbackPromise;
-    return audioUnlockPromise;
+  if(!context) return Promise.resolve(false);
+  silentWebAudioPulse(context);
+  const promise=context.state==='suspended'?context.resume():Promise.resolve();
+  promise.then(()=>{audioUnlocked=context.state==='running';silentWebAudioPulse(context);}).catch(error=>console.warn('Resume AudioContext non riuscito',error));
+  return promise;
+}
+
+function playWebAudioFallback(key,volume){
+  const context=getAudioContext();
+  if(!context) return Promise.resolve(false);
+  const resume=context.state==='suspended'?context.resume():Promise.resolve();
+  return resume.then(()=>ensureSoundBuffer(key)).then(buffer=>{
+    if(!buffer||context.state!=='running') return false;
+    const source=context.createBufferSource();
+    const gain=context.createGain();
+    gain.gain.value=Math.max(.05,Math.min(1,Number(volume)||.72));
+    source.buffer=buffer;
+    source.connect(gain).connect(webAudioGain);
+    source.addEventListener?.('ended',()=>activeSoundSources.delete(source));
+    activeSoundSources.add(source);
+    source.start(0);
+    return true;
+  }).catch(error=>{console.warn('Fallback Web Audio non riuscito',error);return false;});
+}
+
+function playCue(key=active?.sound||'gym',volume=active?.volume||.72,{fromGesture=false}={}){
+  configureShortSoundSession();
+  const player=playerFor(key);
+  selectedTimerPlayer=player;
+  stopOtherPlayers(player);
+  const level=Math.max(.05,Math.min(1,Number(volume)||.72));
+  try{
+    player.muted=false;
+    player.volume=level;
+    player.currentTime=0;
+    // Per l'anteprima questa play() avviene PRIMA di qualsiasi await, direttamente nel click utente.
+    const promise=player.play();
+    if(!promise||typeof promise.then!=='function'){
+      audioUnlocked=true;
+      setAudioStatus(`Riproduzione: ${soundLabel(key)} (HTMLAudio)`);
+      if(navigator.vibrate) navigator.vibrate(50);
+      return Promise.resolve(true);
+    }
+    return promise.then(()=>{
+      audioUnlocked=true;
+      setAudioStatus(`Riproduzione: ${soundLabel(key)} (HTMLAudio)`);
+      if(navigator.vibrate) navigator.vibrate(50);
+      return true;
+    }).catch(async error=>{
+      console.warn(`HTMLAudio play() non riuscito per ${SOUND_FILES[key]}`,error);
+      const fallback=await playWebAudioFallback(key,level);
+      if(fallback){
+        setAudioStatus(`Riproduzione: ${soundLabel(key)} (Web Audio)`);
+        if(navigator.vibrate) navigator.vibrate(50);
+        return true;
+      }
+      setAudioStatus(`Audio non avviato: ${error?.name||'errore iOS'}. Tocca nuovamente.`,false);
+      return false;
+    });
+  }catch(error){
+    console.warn('Errore sincrono HTMLAudio',error);
+    return playWebAudioFallback(key,level).then(ok=>{
+      setAudioStatus(ok?`Riproduzione: ${soundLabel(key)} (Web Audio)`:'Audio non disponibile',ok);
+      return ok;
+    });
   }
-  createSilentPulse(context);
-  const resumePromise=context.state==='suspended' ? context.resume() : Promise.resolve();
-  audioUnlockPromise=Promise.allSettled([resumePromise,fallbackPromise]).then(()=>{
-    createSilentPulse(context);
-    return decodeAllSounds();
-  });
-  return audioUnlockPromise;
 }
 
 function startAudioKeepAlive(){
@@ -267,9 +306,9 @@ function startAudioKeepAlive(){
     const source=context.createBufferSource();
     const gain=context.createGain();
     gain.gain.value=.00001;
-    source.buffer=buffer; source.loop=true; source.connect(gain).connect(context.destination); source.start(0);
+    source.buffer=buffer;source.loop=true;source.connect(gain).connect(context.destination);source.start(0);
     audioKeepAlive={source,gain};
-  }catch(error){ console.debug('Keep-alive audio non disponibile',error); }
+  }catch(error){console.debug('Keep-alive Web Audio non disponibile',error);}
 }
 
 function stopAudioKeepAlive(){
@@ -277,56 +316,12 @@ function stopAudioKeepAlive(){
   audioKeepAlive=null;
 }
 
-async function playFallback(key,volume){
-  try{
-    const player=getFallbackAudio();
-    player.pause();
-    player.src=SOUND_FILES[key];
-    player.volume=Math.max(.01,Math.min(1,Number(volume)||.72));
-    player.currentTime=0;
-    await player.play();
-    fallbackPrimed=true;
-    setAudioStatus('Audio pronto');
-    return true;
-  }catch(error){
-    console.warn('Riproduzione audio di riserva non riuscita',error);
-    setAudioStatus('Tocca di nuovo: iOS non ha ancora autorizzato l’audio',false);
-    return false;
-  }
-}
-
-async function playCue(key=active?.sound||'gym',volume=active?.volume||.72){
-  configureAmbientAudio();
-  const context=getAudioContext();
-  try{
-    if(context){
-      if(context.state==='suspended') await context.resume();
-      if(audioUnlockPromise) await audioUnlockPromise;
-      const buffer=await ensureSoundBuffer(key);
-      if(buffer&&context.state==='running'){
-        const source=context.createBufferSource();
-        const gain=context.createGain();
-        gain.gain.value=Math.max(.01,Math.min(1,Number(volume)||.72));
-        source.buffer=buffer;
-        source.connect(gain).connect(masterGain);
-        source.addEventListener?.('ended',()=>activeSoundSources.delete(source));
-        activeSoundSources.add(source);
-        source.start(0);
-        setAudioStatus('Audio pronto');
-        if(navigator.vibrate) navigator.vibrate(50);
-        return true;
-      }
-    }
-  }catch(error){ console.warn('Web Audio non riuscito; uso il fallback',error); }
-  return playFallback(key,volume);
-}
-
-$('#previewSound').addEventListener('pointerdown',unlockAudioFromGesture);
-$('#previewSound').addEventListener('touchstart',unlockAudioFromGesture,{passive:true});
-$('#previewSound').addEventListener('click',async()=>{
-  setAudioStatus('Attivazione audio…');
-  await unlockAudioFromGesture();
-  await playCue($('#sound').value,Number($('#volume').value));
+$('#previewSound').addEventListener('click',()=>{
+  const key=$('#sound').value;
+  const volume=Number($('#volume').value);
+  // Nessun await prima di playCue: conserva la user activation di Safari/iOS.
+  unlockWebAudioFromGesture();
+  playCue(key,volume,{fromGesture:true});
 });
 
 function clearVoice(){
@@ -369,7 +364,9 @@ function run(){
   keepAwake(); startAudioKeepAlive();
   if(!started){
     started=true;
-    if(phase==='exercise'){playCue();speak('Go',250);} else if(phase==='prepare') speak('Prepara');
+    // Il primo cue parte nello stesso click su Avvia: sblocca il player persistente anche quando c'è la preparazione.
+    playCue();
+    if(phase==='exercise') speak('Go',250); else if(phase==='prepare') speak('Prepara');
   }
   phaseEnd=Date.now()+secondsLeft*1000;
   clearInterval(timerId); timerId=setInterval(tick,100); $('#go').textContent='Pausa';
@@ -435,12 +432,14 @@ function draw(){
   $('#roundsLeft').textContent=phase==='finished'?0:Math.max(0,active.rounds-round+1); $('#seriesLeft').textContent=phase==='finished'?0:Math.max(0,active.series-series+1); $('#nextBox').classList.toggle('hidden',phase==='finished');
 }
 
-$('#go').addEventListener('pointerdown',unlockAudioFromGesture);
-$('#go').addEventListener('touchstart',unlockAudioFromGesture,{passive:true});
-$('#go').addEventListener('click',async()=>{
-  await unlockAudioFromGesture();
-  if(timerId){ secondsLeft=Math.max(0,(phaseEnd-Date.now())/1000); clearInterval(timerId); timerId=null; $('#go').textContent='Riprendi'; }
-  else run();
+$('#go').addEventListener('click',()=>{
+  if(timerId){
+    secondsLeft=Math.max(0,(phaseEnd-Date.now())/1000); clearInterval(timerId); timerId=null; $('#go').textContent='Riprendi';
+  }else{
+    // Sblocco sincrono; run() riproduce subito il primo cue nello stesso gesto dell'utente.
+    unlockWebAudioFromGesture();
+    run();
+  }
 });
 function resetTimer(){
   clearInterval(timerId); timerId=null; clearVoice(); stopAudioKeepAlive(); releaseWakeLock(); phase=active.prep>0?'prepare':'exercise'; round=1; series=1; secondsLeft=phaseDuration(); started=false; announced.clear(); $('#go').disabled=false; $('#go').textContent='Avvia'; $('#wake').textContent='Schermo attivo: da avviare'; $('#wake').style.color=''; draw();
@@ -450,7 +449,7 @@ $('#back').addEventListener('click',()=>{ resetTimer(); active=null; $('#timer')
 
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'&&timerId){
-    configureAmbientAudio();
+    configureShortSoundSession();
     audioContext?.resume().catch(()=>{});
     keepAwake(); startAudioKeepAlive(); tick();
   }
@@ -473,4 +472,4 @@ $('#swgo').addEventListener('click',()=>{
 $('#swreset').addEventListener('click',()=>{ clearInterval(stopwatchId); stopwatchId=null; stopwatchElapsed=0; $('#swgo').textContent='Avvia'; drawStopwatch(); });
 
 save(); render(); preloadSoundFiles();
-if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn)); }
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=15.2').catch(console.warn)); }
