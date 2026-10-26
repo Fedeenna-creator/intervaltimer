@@ -1,6 +1,9 @@
 'use strict';
-const CACHE='intervaltimer-v15';
-const SHELL=['./','./index.html','./app.js','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
+const CACHE='intervaltimer-v15-audiofix-1';
+const SHELL=[
+  './','./index.html','./app.js','./manifest.webmanifest','./icon-192.png','./icon-512.png',
+  './sound-gym.wav','./sound-electronic.wav','./sound-horn.wav','./sound-military.wav','./sound-industrial.wav','./silence.wav'
+];
 
 self.addEventListener('install',event=>{
   self.skipWaiting();
@@ -17,7 +20,10 @@ self.addEventListener('fetch',event=>{
   event.respondWith(
     caches.match(event.request).then(cached=>{
       const fresh=fetch(event.request).then(response=>{
-        if(response&&response.ok){ const copy=response.clone(); caches.open(CACHE).then(cache=>cache.put(event.request,copy)); }
+        if(response&&response.ok){
+          const copy=response.clone();
+          caches.open(CACHE).then(cache=>cache.put(event.request,copy));
+        }
         return response;
       }).catch(()=>cached);
       return cached||fresh;

@@ -32,7 +32,21 @@ let timerId = null;
 let wakeLock = null;
 let audioContext = null;
 let masterGain = null;
-let compressor = null;
+let audioKeepAlive = null;
+let fallbackAudio = null;
+let fallbackPrimed = false;
+let fallbackPrimePromise = null;
+let audioUnlockPromise = null;
+const soundBuffers = new Map();
+const rawSoundData = new Map();
+const activeSoundSources = new Set();
+const SOUND_FILES = {
+  gym:'sound-gym.wav',
+  electronic:'sound-electronic.wav',
+  horn:'sound-horn.wav',
+  military:'sound-military.wav',
+  industrial:'sound-industrial.wav'
+};
 let announced = new Set();
 let started = false;
 let voiceTimeouts = [];
@@ -112,49 +126,207 @@ $('#list').addEventListener('click',event=>{
   }
 });
 
-function ensureAudio(){
-  if(!audioContext){
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if(!AudioCtx) return null;
-    audioContext = new AudioCtx({latencyHint:'interactive'});
-    masterGain = audioContext.createGain();
-    compressor = audioContext.createDynamicsCompressor();
-    compressor.threshold.value=-16; compressor.knee.value=12; compressor.ratio.value=5; compressor.attack.value=.003; compressor.release.value=.18;
-    masterGain.connect(compressor).connect(audioContext.destination);
+function setAudioStatus(message,ok=true){
+  const element=$('#audioStatus');
+  if(!element) return;
+  element.textContent=message;
+  element.style.color=ok?'#20d65a':'#ffb02e';
+}
+
+function configureAmbientAudio(){
+  try{
+    if(navigator.audioSession && 'type' in navigator.audioSession) navigator.audioSession.type='ambient';
+  }catch(error){ console.debug('Audio session ambient non disponibile',error); }
+}
+
+function getAudioContext(){
+  if(audioContext) return audioContext;
+  const AudioCtx=window.AudioContext||window.webkitAudioContext;
+  if(!AudioCtx) return null;
+  try{
+    // Nessuna opzione nel costruttore: maggiore compatibilità con le versioni di Safari/iOS.
+    audioContext=new AudioCtx();
+    masterGain=audioContext.createGain();
+    masterGain.gain.value=.72;
+    masterGain.connect(audioContext.destination);
+    audioContext.addEventListener?.('statechange',()=>{
+      if(audioContext.state==='running') setAudioStatus('Audio pronto');
+    });
+    return audioContext;
+  }catch(error){
+    console.warn('Web Audio non disponibile',error);
+    return null;
   }
-  if(audioContext.state==='suspended') audioContext.resume();
-  masterGain.gain.setTargetAtTime(Number(active?.volume || $('#volume')?.value || .72),audioContext.currentTime,.01);
-  return audioContext;
 }
 
-function tone(frequency,start,duration,type='sine',gain=.7,endFrequency=null){
-  const context=ensureAudio(); if(!context) return;
-  const oscillator=context.createOscillator(); const envelope=context.createGain(); const at=context.currentTime+start;
-  oscillator.type=type; oscillator.frequency.setValueAtTime(frequency,at);
-  if(endFrequency) oscillator.frequency.exponentialRampToValueAtTime(endFrequency,at+duration);
-  envelope.gain.setValueAtTime(.0001,at); envelope.gain.exponentialRampToValueAtTime(Math.max(.001,gain),at+.008); envelope.gain.exponentialRampToValueAtTime(.0001,at+duration);
-  oscillator.connect(envelope).connect(masterGain); oscillator.start(at); oscillator.stop(at+duration+.03);
+function getFallbackAudio(){
+  if(fallbackAudio) return fallbackAudio;
+  fallbackAudio=new Audio();
+  fallbackAudio.preload='auto';
+  fallbackAudio.playsInline=true;
+  fallbackAudio.setAttribute('playsinline','');
+  fallbackAudio.setAttribute('webkit-playsinline','');
+  return fallbackAudio;
 }
 
-function playSound(key){
-  key = key || active?.sound || $('#sound')?.value || 'gym'; ensureAudio();
-  if(key==='gym'){
-    tone(165,0,.18,'square',.9,125); tone(110,.19,.38,'square',1,82);
-  }else if(key==='electronic'){
-    tone(880,0,.12,'sine',.9); tone(1175,.14,.17,'sine',.95); tone(1568,.33,.12,'sine',.8);
-  }else if(key==='horn'){
-    tone(210,0,.5,'sawtooth',.55,175); tone(264,0,.5,'sawtooth',.45,220); tone(315,.04,.44,'square',.18,270);
-  }else if(key==='military'){
-    tone(740,0,.09,'square',.75); tone(740,.13,.09,'square',.75); tone(980,.26,.18,'square',.9);
-  }else{
-    tone(520,0,.13,'sawtooth',.72,430); tone(390,.15,.13,'sawtooth',.78,320); tone(245,.31,.32,'sawtooth',.9,180);
+function primeFallbackAudio(){
+  if(fallbackPrimed) return Promise.resolve();
+  if(fallbackPrimePromise) return fallbackPrimePromise;
+  const player=getFallbackAudio();
+  player.src='silence.wav';
+  player.volume=.01;
+  player.load();
+  const attempt=player.play();
+  if(!attempt){ fallbackPrimed=true; return Promise.resolve(); }
+  fallbackPrimePromise=attempt.then(()=>{
+    fallbackPrimed=true;
+    player.pause();
+    player.currentTime=0;
+  }).catch(error=>{
+    console.debug('Sblocco audio HTML rimandato',error);
+  }).finally(()=>{fallbackPrimePromise=null;});
+  return fallbackPrimePromise;
+}
+
+function createSilentPulse(context){
+  try{
+    const buffer=context.createBuffer(1,1,22050);
+    const source=context.createBufferSource();
+    source.buffer=buffer;
+    source.connect(context.destination);
+    source.start(0);
+  }catch(error){ console.debug('Silent pulse non disponibile',error); }
+}
+
+function decodeAudio(context,arrayBuffer){
+  return new Promise((resolve,reject)=>{
+    let settled=false;
+    const ok=value=>{if(!settled){settled=true;resolve(value)}};
+    const fail=error=>{if(!settled){settled=true;reject(error)}};
+    try{
+      const result=context.decodeAudioData(arrayBuffer.slice(0),ok,fail);
+      if(result&&typeof result.then==='function') result.then(ok,fail);
+    }catch(error){ fail(error); }
+  });
+}
+
+async function preloadSoundFiles(){
+  await Promise.all(Object.entries(SOUND_FILES).map(async([key,file])=>{
+    try{
+      const response=await fetch(file,{cache:'force-cache'});
+      if(!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      rawSoundData.set(key,await response.arrayBuffer());
+    }catch(error){ console.warn(`Precaricamento ${file} non riuscito`,error); }
+  }));
+}
+
+async function ensureSoundBuffer(key){
+  if(soundBuffers.has(key)) return soundBuffers.get(key);
+  const context=getAudioContext();
+  if(!context) return null;
+  if(!rawSoundData.has(key)){
+    const response=await fetch(SOUND_FILES[key],{cache:'force-cache'});
+    if(!response.ok) throw new Error(`Audio ${key} non disponibile`);
+    rawSoundData.set(key,await response.arrayBuffer());
   }
-  if(navigator.vibrate) navigator.vibrate([50]);
+  const buffer=await decodeAudio(context,rawSoundData.get(key));
+  soundBuffers.set(key,buffer);
+  return buffer;
 }
 
-$('#previewSound').addEventListener('click',()=>{
-  active = {...DEFAULT_WORKOUT,sound:$('#sound').value,volume:Number($('#volume').value)};
-  playSound(active.sound); active=null;
+function decodeAllSounds(){
+  return Promise.all(Object.keys(SOUND_FILES).map(key=>ensureSoundBuffer(key).catch(error=>{
+    console.warn(`Decodifica ${key} non riuscita`,error);
+    return null;
+  })));
+}
+
+function unlockAudioFromGesture(){
+  configureAmbientAudio();
+  const context=getAudioContext();
+  // play() e resume() vengono invocati subito nel gesto dell'utente: requisito di iOS/Safari.
+  const fallbackPromise=primeFallbackAudio();
+  if(!context){
+    audioUnlockPromise=fallbackPromise;
+    return audioUnlockPromise;
+  }
+  createSilentPulse(context);
+  const resumePromise=context.state==='suspended' ? context.resume() : Promise.resolve();
+  audioUnlockPromise=Promise.allSettled([resumePromise,fallbackPromise]).then(()=>{
+    createSilentPulse(context);
+    return decodeAllSounds();
+  });
+  return audioUnlockPromise;
+}
+
+function startAudioKeepAlive(){
+  const context=getAudioContext();
+  if(!context||audioKeepAlive) return;
+  try{
+    const buffer=context.createBuffer(1,Math.max(1,Math.round(context.sampleRate*.25)),context.sampleRate);
+    const source=context.createBufferSource();
+    const gain=context.createGain();
+    gain.gain.value=.00001;
+    source.buffer=buffer; source.loop=true; source.connect(gain).connect(context.destination); source.start(0);
+    audioKeepAlive={source,gain};
+  }catch(error){ console.debug('Keep-alive audio non disponibile',error); }
+}
+
+function stopAudioKeepAlive(){
+  try{audioKeepAlive?.source.stop();}catch{}
+  audioKeepAlive=null;
+}
+
+async function playFallback(key,volume){
+  try{
+    const player=getFallbackAudio();
+    player.pause();
+    player.src=SOUND_FILES[key];
+    player.volume=Math.max(.01,Math.min(1,Number(volume)||.72));
+    player.currentTime=0;
+    await player.play();
+    fallbackPrimed=true;
+    setAudioStatus('Audio pronto');
+    return true;
+  }catch(error){
+    console.warn('Riproduzione audio di riserva non riuscita',error);
+    setAudioStatus('Tocca di nuovo: iOS non ha ancora autorizzato l’audio',false);
+    return false;
+  }
+}
+
+async function playCue(key=active?.sound||'gym',volume=active?.volume||.72){
+  configureAmbientAudio();
+  const context=getAudioContext();
+  try{
+    if(context){
+      if(context.state==='suspended') await context.resume();
+      if(audioUnlockPromise) await audioUnlockPromise;
+      const buffer=await ensureSoundBuffer(key);
+      if(buffer&&context.state==='running'){
+        const source=context.createBufferSource();
+        const gain=context.createGain();
+        gain.gain.value=Math.max(.01,Math.min(1,Number(volume)||.72));
+        source.buffer=buffer;
+        source.connect(gain).connect(masterGain);
+        source.addEventListener?.('ended',()=>activeSoundSources.delete(source));
+        activeSoundSources.add(source);
+        source.start(0);
+        setAudioStatus('Audio pronto');
+        if(navigator.vibrate) navigator.vibrate(50);
+        return true;
+      }
+    }
+  }catch(error){ console.warn('Web Audio non riuscito; uso il fallback',error); }
+  return playFallback(key,volume);
+}
+
+$('#previewSound').addEventListener('pointerdown',unlockAudioFromGesture);
+$('#previewSound').addEventListener('touchstart',unlockAudioFromGesture,{passive:true});
+$('#previewSound').addEventListener('click',async()=>{
+  setAudioStatus('Attivazione audio…');
+  await unlockAudioFromGesture();
+  await playCue($('#sound').value,Number($('#volume').value));
 });
 
 function clearVoice(){
@@ -194,10 +366,10 @@ function openTimer(workout){
 }
 
 function run(){
-  ensureAudio(); keepAwake();
+  keepAwake(); startAudioKeepAlive();
   if(!started){
     started=true;
-    if(phase==='exercise'){playSound();speak('Go',250);} else if(phase==='prepare') speak('Prepara');
+    if(phase==='exercise'){playCue();speak('Go',250);} else if(phase==='prepare') speak('Prepara');
   }
   phaseEnd=Date.now()+secondsLeft*1000;
   clearInterval(timerId); timerId=setInterval(tick,100); $('#go').textContent='Pausa';
@@ -214,32 +386,33 @@ function tick(){
 function continueAutomatically(){ setTimeout(()=>{ if($('#timer').classList.contains('active')) run(); },180); }
 function advancePhase(){
   if(phase==='prepare'){
-    setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); return;
+    setPhase('exercise'); playCue(); speak('Go',250); continueAutomatically(); return;
   }
   if(phase==='exercise'){
-    playSound(); speak('Stop',250);
     if(round<active.rounds){
+      playCue(); speak('Stop',250);
       if(active.rest>0){ setPhase('rest'); continueAutomatically(); }
-      else { round++; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); }
+      else { round++; setPhase('exercise'); speak('Go',250); continueAutomatically(); }
       return;
     }
     if(series<active.series){
+      playCue(); speak('Stop',250);
       if(active.brk>0){ setPhase('break'); speak('Riposo tra serie',650); continueAutomatically(); }
-      else { series++; round=1; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); }
+      else { series++; round=1; setPhase('exercise'); speak('Go',250); continueAutomatically(); }
       return;
     }
     finishWorkout(); return;
   }
   if(phase==='rest'){
-    round++; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); return;
+    round++; setPhase('exercise'); playCue(); speak('Go',250); continueAutomatically(); return;
   }
   if(phase==='break'){
-    series++; round=1; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically();
+    series++; round=1; setPhase('exercise'); playCue(); speak('Go',250); continueAutomatically();
   }
 }
 
 function finishWorkout(){
-  phase='finished'; secondsLeft=0; clearInterval(timerId); timerId=null; releaseWakeLock(); playSound('electronic'); speak('Allenamento completato',500); $('#go').textContent='Completato'; $('#go').disabled=true; draw();
+  phase='finished'; secondsLeft=0; clearInterval(timerId); timerId=null; releaseWakeLock(); playCue(); stopAudioKeepAlive(); speak('Allenamento completato',500); $('#go').textContent='Completato'; $('#go').disabled=true; draw();
 }
 
 function nextInfo(){
@@ -262,19 +435,27 @@ function draw(){
   $('#roundsLeft').textContent=phase==='finished'?0:Math.max(0,active.rounds-round+1); $('#seriesLeft').textContent=phase==='finished'?0:Math.max(0,active.series-series+1); $('#nextBox').classList.toggle('hidden',phase==='finished');
 }
 
-$('#go').addEventListener('click',()=>{
-  ensureAudio();
+$('#go').addEventListener('pointerdown',unlockAudioFromGesture);
+$('#go').addEventListener('touchstart',unlockAudioFromGesture,{passive:true});
+$('#go').addEventListener('click',async()=>{
+  await unlockAudioFromGesture();
   if(timerId){ secondsLeft=Math.max(0,(phaseEnd-Date.now())/1000); clearInterval(timerId); timerId=null; $('#go').textContent='Riprendi'; }
   else run();
 });
 function resetTimer(){
-  clearInterval(timerId); timerId=null; clearVoice(); releaseWakeLock(); phase=active.prep>0?'prepare':'exercise'; round=1; series=1; secondsLeft=phaseDuration(); started=false; announced.clear(); $('#go').disabled=false; $('#go').textContent='Avvia'; $('#wake').textContent='Schermo attivo: da avviare'; $('#wake').style.color=''; draw();
+  clearInterval(timerId); timerId=null; clearVoice(); stopAudioKeepAlive(); releaseWakeLock(); phase=active.prep>0?'prepare':'exercise'; round=1; series=1; secondsLeft=phaseDuration(); started=false; announced.clear(); $('#go').disabled=false; $('#go').textContent='Avvia'; $('#wake').textContent='Schermo attivo: da avviare'; $('#wake').style.color=''; draw();
 }
 $('#reset').addEventListener('click',resetTimer);
 $('#back').addEventListener('click',()=>{ resetTimer(); active=null; $('#timer').classList.remove('active'); $('#home').classList.add('active'); });
 
-document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && timerId){ keepAwake(); tick(); } });
-window.addEventListener('pagehide',()=>releaseWakeLock());
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&timerId){
+    configureAmbientAudio();
+    audioContext?.resume().catch(()=>{});
+    keepAwake(); startAudioKeepAlive(); tick();
+  }
+});
+window.addEventListener('pagehide',()=>{stopAudioKeepAlive();releaseWakeLock();});
 
 function setTab(intervalsVisible){
   $('#intervals').hidden=!intervalsVisible; $('#stopwatch').hidden=intervalsVisible; $('#tabI').classList.toggle('active',intervalsVisible); $('#tabS').classList.toggle('active',!intervalsVisible);
@@ -291,5 +472,5 @@ $('#swgo').addEventListener('click',()=>{
 });
 $('#swreset').addEventListener('click',()=>{ clearInterval(stopwatchId); stopwatchId=null; stopwatchElapsed=0; $('#swgo').textContent='Avvia'; drawStopwatch(); });
 
-save(); render();
+save(); render(); preloadSoundFiles();
 if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn)); }
