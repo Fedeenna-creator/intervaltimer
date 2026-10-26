@@ -1,31 +1,295 @@
-const $=s=>document.querySelector(s),K='it.workouts.v6';
-let old=JSON.parse(localStorage.getItem('it.workouts.v5')||localStorage.getItem('it.workouts.v3')||'null');
-let ws=old?old.map(w=>({...w,prep:w.prep??10,sound:w.sound||'gym',voice:w.voice??false})):[{id:crypto.randomUUID(),name:'Tabata',prep:10,work:20,rest:10,rounds:8,series:1,brk:60,sound:'gym',voice:false}];
-let a,p='ready',round=1,serie=1,left=0,end=0,t=null,lock=null,ctx=null,master=null,said=new Set(),hasStarted=false;let st=null,se=0,ss=0;
-const save=()=>localStorage.setItem(K,JSON.stringify(ws)),fmt=n=>`${String(n/60|0).padStart(2,'0')}:${String(n%60|0).padStart(2,'0')}`;save();
-function render(){$('#list').innerHTML=ws.map(w=>`<div class="card"><b>${w.name}</b><br><small>${w.prep}s preparazione · ${w.work}s allenamento · ${w.rest}s riposo<br>${w.rounds} round · ${w.series} serie · ${w.brk}s tra serie<br>Voce: ${w.voice?'attiva':'disattiva'}</small><div class="row"><button class="green play" data-id="${w.id}">Avvia</button><button class="edit" data-id="${w.id}">Modifica</button><button class="del" data-id="${w.id}">Elimina</button></div></div>`).join('')}
-function edit(w={}){for(const k of ['id','name','prep','work','rest','rounds','series','brk','sound'])$('#'+k).value=w[k]??({prep:10,work:30,rest:15,rounds:8,series:1,brk:60,sound:'gym'}[k]??'');$('#voice').checked=w.voice??false;$('#dlg').showModal()}
-$('#new').onclick=()=>edit();$('#cancel').onclick=()=>$('#dlg').close();
-$('#form').onsubmit=e=>{e.preventDefault();let w={id:$('#id').value||crypto.randomUUID(),name:$('#name').value,...Object.fromEntries(['prep','work','rest','rounds','series','brk'].map(k=>[k,+$('#'+k).value])),sound:$('#sound').value,voice:$('#voice').checked},i=ws.findIndex(x=>x.id==w.id);i<0?ws.push(w):ws[i]=w;save();render();$('#dlg').close()};
-$('#list').onclick=e=>{let w=ws.find(x=>x.id==e.target.dataset.id);if(!w)return;if(e.target.matches('.play'))openTimer(w);if(e.target.matches('.edit'))edit(w);if(e.target.matches('.del')&&confirm('Eliminare?')){ws=ws.filter(x=>x.id!=w.id);save();render()}};
-function audio(){if(!ctx){const C=window.AudioContext||window.webkitAudioContext;ctx=new C({latencyHint:'interactive'});master=ctx.createGain();master.gain.value=.22;master.connect(ctx.destination)}if(ctx.state==='suspended')ctx.resume();return ctx}
-function tone(freq,start,duration,type='sine',volume=1){const c=audio(),o=c.createOscillator(),g=c.createGain(),at=c.currentTime+start;o.type=type;o.frequency.setValueAtTime(freq,at);g.gain.setValueAtTime(.0001,at);g.gain.exponentialRampToValueAtTime(Math.max(.001,volume),at+.008);g.gain.exponentialRampToValueAtTime(.0001,at+duration);o.connect(g).connect(master);o.start(at);o.stop(at+duration+.02)}
-function playSound(key){key=key||a?.sound||$('#sound')?.value||'gym';audio();if(key==='gym'){tone(165,0,.16,'square',.8);tone(110,.18,.34,'square',.9)}else if(key==='electronic'){tone(880,0,.11,'sine',.8);tone(1175,.14,.15,'sine',.8)}else if(key==='horn'){tone(220,0,.42,'sawtooth',.55);tone(277,0,.42,'sawtooth',.4)}else if(key==='military'){tone(740,0,.09,'square',.65);tone(740,.13,.09,'square',.65);tone(980,.26,.16,'square',.75)}else{tone(440,0,.12,'sawtooth',.65);tone(330,.15,.12,'sawtooth',.65);tone(220,.30,.28,'sawtooth',.75)}}
-function gong(){playSound()}
-function clearVoice(){speechSynthesis.cancel()}
-function speak(x,delay=0){if(!a?.voice)return;setTimeout(()=>{let u=new SpeechSynthesisUtterance(x);u.lang='it-IT';u.rate=.95;u.volume=.8;speechSynthesis.speak(u)},delay)}
-async function wake(){try{lock=await navigator.wakeLock.request('screen');$('#wake').textContent='Schermo sempre acceso';$('#wake').style.color='#20d65a'}catch{$('#wake').textContent='Schermo sempre acceso non disponibile';$('#wake').style.color='#ffb02e'}}
-async function release(){try{await lock?.release()}catch{}lock=null}
-function dur(x=p){return x=='prepare'?a.prep:x=='exercise'?a.work:x=='rest'?a.rest:x=='break'?a.brk:0}
-function setPhase(x){p=x;left=dur();said.clear();draw()}
-function openTimer(w){a=w;p=w.prep>0?'prepare':'exercise';round=serie=1;left=dur();hasStarted=false;$('#home').classList.remove('active');$('#timer').classList.add('active');draw()}
-function run(){audio();wake();if(!hasStarted){hasStarted=true;if(p=='exercise'){gong();speak('Go',300)}else if(p=='prepare')speak('Prepara')}end=Date.now()+left*1000;t=setInterval(tick,100);$('#go').textContent='Pausa'}
-function tick(){left=Math.max(0,(end-Date.now())/1000);let n=Math.ceil(left);if(a.voice&&n>=1&&n<=3&&!said.has(n)){said.add(n);speak(String(n))}if(left<=0){clearInterval(t);t=null;next()}draw()}
-function next(){if(p=='prepare'){setPhase('exercise');gong();speak('Go',300)}else if(p=='exercise'){gong();speak('Stop',300);if(round<a.rounds)setPhase('rest');else if(serie<a.series){setPhase('break');speak('Riposo tra serie',800)}else{p='finished';left=0;release();speak('Allenamento completato',800);draw();return}}else if(p=='rest'){round++;setPhase('exercise');gong();speak('Go',300)}else if(p=='break'){serie++;round=1;setPhase('exercise');gong();speak('Go',300)}setTimeout(run,250)}
-function nextInfo(){if(p=='prepare')return['ALLENAMENTO',a.work,'exercise'];if(p=='exercise'){if(round<a.rounds)return['RIPOSO',a.rest,'rest'];if(serie<a.series)return['RIPOSO TRA SERIE',a.brk,'break'];return['FINE ALLENAMENTO',0,'finished']}if(p=='rest'||p=='break')return['ALLENAMENTO',a.work,'exercise'];return['COMPLETATO',0,'finished']}
-function draw(){let labels={prepare:'PREPARAZIONE',exercise:'ALLENAMENTO',rest:'RIPOSO',break:'RIPOSO TRA SERIE',finished:'COMPLETATO'};$('#title').textContent=a.name;$('#phase').textContent=labels[p];$('#clock').textContent=fmt(Math.ceil(left));$('#current').className='current '+p;let ni=nextInfo();$('#nextPhase').textContent=ni[0];$('#nextTime').textContent=fmt(ni[1]);$('#nextBox').className='nextBox next-'+ni[2];$('#roundsLeft').textContent=p=='finished'?0:Math.max(0,a.rounds-round+1);$('#seriesLeft').textContent=p=='finished'?0:Math.max(0,a.series-serie+1);$('#nextBox').style.display=p=='finished'?'none':'block'}
-$('#go').onclick=()=>{audio();if(t){left=Math.max(0,(end-Date.now())/1000);clearInterval(t);t=null;$('#go').textContent='Riprendi'}else run()};
-function reset(){clearInterval(t);t=null;release();clearVoice();p=a.prep>0?'prepare':'exercise';round=serie=1;left=dur();hasStarted=false;$('#go').textContent='Avvia';draw()}
-$('#reset').onclick=reset;$('#back').onclick=()=>{reset();$('#timer').classList.remove('active');$('#home').classList.add('active')};$('#tabS').onclick=()=>{$('#intervals').hidden=true;$('#stopwatch').hidden=false};$('#tabI').onclick=()=>{$('#intervals').hidden=false;$('#stopwatch').hidden=true};
-function swdraw(){let x=st?Date.now()-ss+se:se;$('#swtime').textContent=`${String(x/60000|0).padStart(2,'0')}:${String(x/1000%60|0).padStart(2,'0')}.${String(x/10%100|0).padStart(2,'0')}`}
-$('#swgo').onclick=()=>{if(st){se+=Date.now()-ss;clearInterval(st);st=null;$('#swgo').textContent='Avvia'}else{ss=Date.now();st=setInterval(swdraw,40);$('#swgo').textContent='Pausa'}};$('#swreset').onclick=()=>{clearInterval(st);st=null;se=0;swdraw()};document.addEventListener('visibilitychange',()=>{if(document.visibilityState=='visible'&&t)wake()});if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');render();$('#previewSound').onclick=()=>playSound($('#sound').value);
+'use strict';
+
+const $ = (selector) => document.querySelector(selector);
+const STORAGE_KEY = 'it.workouts.v7';
+const LEGACY_KEYS = ['it.workouts.v6', 'it.workouts.v5', 'it.workouts.v3'];
+const DEFAULT_WORKOUT = {name:'Tabata',prep:10,work:20,rest:10,rounds:8,series:1,brk:60,sound:'gym',volume:0.72,voice:false};
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+const numberFields = ['prep','work','rest','rounds','series','brk'];
+
+function readWorkouts(){
+  let raw = localStorage.getItem(STORAGE_KEY);
+  if(!raw){
+    for(const key of LEGACY_KEYS){ raw = localStorage.getItem(key); if(raw) break; }
+  }
+  try{
+    const parsed = raw ? JSON.parse(raw) : null;
+    if(Array.isArray(parsed) && parsed.length){
+      return parsed.map(w => ({...DEFAULT_WORKOUT,...w,id:w.id||uid(),voice:w.voice===true,volume:Number(w.volume)||0.72}));
+    }
+  }catch(error){ console.warn('Impossibile leggere gli allenamenti salvati', error); }
+  return [{...DEFAULT_WORKOUT,id:uid()}];
+}
+
+let workouts = readWorkouts();
+let active = null;
+let phase = 'ready';
+let round = 1;
+let series = 1;
+let secondsLeft = 0;
+let phaseEnd = 0;
+let timerId = null;
+let wakeLock = null;
+let audioContext = null;
+let masterGain = null;
+let compressor = null;
+let announced = new Set();
+let started = false;
+let voiceTimeouts = [];
+let stopwatchId = null;
+let stopwatchElapsed = 0;
+let stopwatchStartedAt = 0;
+
+const save = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(workouts));
+const formatTime = (value) => {
+  const n = Math.max(0, Math.ceil(Number(value)||0));
+  const hours = Math.floor(n/3600);
+  const minutes = Math.floor((n%3600)/60);
+  const seconds = n%60;
+  return hours ? `${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}` : `${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`;
+};
+const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+
+function totalDuration(w){
+  return w.prep + (w.work*w.rounds*w.series) + (w.rest*Math.max(0,w.rounds-1)*w.series) + (w.brk*Math.max(0,w.series-1));
+}
+
+function render(){
+  if(!workouts.length){ $('#list').innerHTML='<div class="empty">Nessun allenamento salvato.</div>'; return; }
+  $('#list').innerHTML = workouts.map(w => `
+    <article class="card">
+      <div class="card-title">${escapeHtml(w.name)}</div>
+      <small>${w.prep}s preparazione · ${w.work}s allenamento · ${w.rest}s riposo<br>${w.rounds} round · ${w.series} serie · ${w.brk}s tra serie · Totale ${formatTime(totalDuration(w))}<br>Suono: ${escapeHtml(soundLabel(w.sound))} (${volumeLabel(w.volume)}) · Voce: ${w.voice?'attiva':'disattiva'}</small>
+      <div class="row"><button class="green play" data-id="${escapeHtml(w.id)}">Avvia</button><button class="edit" data-id="${escapeHtml(w.id)}">Modifica</button><button class="danger del" data-id="${escapeHtml(w.id)}">Elimina</button></div>
+    </article>`).join('');
+}
+
+function soundLabel(key){ return ({gym:'Gym Buzzer',electronic:'Electronic Beep',horn:'Air Horn',military:'Military Timer',industrial:'Industrial Alarm'})[key] || 'Gym Buzzer'; }
+function volumeLabel(value){ const n=Number(value); return n>=.95?'massimo':n>=.6?'forte':'medio'; }
+
+function openEditor(workout={}){
+  const value = {...DEFAULT_WORKOUT,...workout};
+  $('#dialogTitle').textContent = workout.id ? 'Modifica allenamento' : 'Nuovo allenamento';
+  $('#id').value = workout.id || '';
+  $('#name').value = workout.name || '';
+  for(const key of numberFields) $('#'+key).value = value[key];
+  $('#sound').value = value.sound;
+  $('#volume').value = String(value.volume);
+  if(!$('#volume').value) $('#volume').value='0.72';
+  $('#voice').checked = value.voice === true;
+  $('#dlg').showModal();
+  setTimeout(()=>$('#name').focus(),50);
+}
+
+$('#new').addEventListener('click',()=>openEditor());
+$('#cancel').addEventListener('click',()=>$('#dlg').close());
+$('#dlg').addEventListener('click',event=>{ if(event.target===$('#dlg')) $('#dlg').close(); });
+$('#form').addEventListener('submit',event=>{
+  event.preventDefault();
+  const workout = {
+    id: $('#id').value || uid(),
+    name: $('#name').value.trim(),
+    ...Object.fromEntries(numberFields.map(key=>[key,Number($('#'+key).value)])),
+    sound: $('#sound').value,
+    volume: Number($('#volume').value),
+    voice: $('#voice').checked
+  };
+  if(!workout.name || workout.work<1 || workout.rounds<1 || workout.series<1) return;
+  const index = workouts.findIndex(w=>w.id===workout.id);
+  if(index<0) workouts.push(workout); else workouts[index]=workout;
+  save(); render(); $('#dlg').close();
+});
+
+$('#list').addEventListener('click',event=>{
+  const id = event.target.dataset.id;
+  if(!id) return;
+  const workout = workouts.find(w=>w.id===id);
+  if(!workout) return;
+  if(event.target.classList.contains('play')) openTimer(workout);
+  if(event.target.classList.contains('edit')) openEditor(workout);
+  if(event.target.classList.contains('del') && confirm(`Eliminare “${workout.name}”?`)){
+    workouts = workouts.filter(w=>w.id!==id); save(); render();
+  }
+});
+
+function ensureAudio(){
+  if(!audioContext){
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if(!AudioCtx) return null;
+    audioContext = new AudioCtx({latencyHint:'interactive'});
+    masterGain = audioContext.createGain();
+    compressor = audioContext.createDynamicsCompressor();
+    compressor.threshold.value=-16; compressor.knee.value=12; compressor.ratio.value=5; compressor.attack.value=.003; compressor.release.value=.18;
+    masterGain.connect(compressor).connect(audioContext.destination);
+  }
+  if(audioContext.state==='suspended') audioContext.resume();
+  masterGain.gain.setTargetAtTime(Number(active?.volume || $('#volume')?.value || .72),audioContext.currentTime,.01);
+  return audioContext;
+}
+
+function tone(frequency,start,duration,type='sine',gain=.7,endFrequency=null){
+  const context=ensureAudio(); if(!context) return;
+  const oscillator=context.createOscillator(); const envelope=context.createGain(); const at=context.currentTime+start;
+  oscillator.type=type; oscillator.frequency.setValueAtTime(frequency,at);
+  if(endFrequency) oscillator.frequency.exponentialRampToValueAtTime(endFrequency,at+duration);
+  envelope.gain.setValueAtTime(.0001,at); envelope.gain.exponentialRampToValueAtTime(Math.max(.001,gain),at+.008); envelope.gain.exponentialRampToValueAtTime(.0001,at+duration);
+  oscillator.connect(envelope).connect(masterGain); oscillator.start(at); oscillator.stop(at+duration+.03);
+}
+
+function playSound(key){
+  key = key || active?.sound || $('#sound')?.value || 'gym'; ensureAudio();
+  if(key==='gym'){
+    tone(165,0,.18,'square',.9,125); tone(110,.19,.38,'square',1,82);
+  }else if(key==='electronic'){
+    tone(880,0,.12,'sine',.9); tone(1175,.14,.17,'sine',.95); tone(1568,.33,.12,'sine',.8);
+  }else if(key==='horn'){
+    tone(210,0,.5,'sawtooth',.55,175); tone(264,0,.5,'sawtooth',.45,220); tone(315,.04,.44,'square',.18,270);
+  }else if(key==='military'){
+    tone(740,0,.09,'square',.75); tone(740,.13,.09,'square',.75); tone(980,.26,.18,'square',.9);
+  }else{
+    tone(520,0,.13,'sawtooth',.72,430); tone(390,.15,.13,'sawtooth',.78,320); tone(245,.31,.32,'sawtooth',.9,180);
+  }
+  if(navigator.vibrate) navigator.vibrate([50]);
+}
+
+$('#previewSound').addEventListener('click',()=>{
+  active = {...DEFAULT_WORKOUT,sound:$('#sound').value,volume:Number($('#volume').value)};
+  playSound(active.sound); active=null;
+});
+
+function clearVoice(){
+  for(const timeout of voiceTimeouts) clearTimeout(timeout); voiceTimeouts=[];
+  if('speechSynthesis' in window) speechSynthesis.cancel();
+}
+function speak(text,delay=0){
+  if(!active?.voice || !('speechSynthesis' in window)) return;
+  const timeout=setTimeout(()=>{
+    const utterance=new SpeechSynthesisUtterance(text); utterance.lang='it-IT'; utterance.rate=.95; utterance.volume=.85; speechSynthesis.speak(utterance);
+  },delay);
+  voiceTimeouts.push(timeout);
+}
+
+async function keepAwake(){
+  if(!('wakeLock' in navigator)){ $('#wake').textContent='Schermo sempre acceso non disponibile'; $('#wake').style.color='#ffb02e'; return; }
+  try{
+    if(!wakeLock) wakeLock=await navigator.wakeLock.request('screen');
+    $('#wake').textContent='Schermo sempre acceso'; $('#wake').style.color='#20d65a';
+    wakeLock.addEventListener('release',()=>{wakeLock=null;});
+  }catch(error){ $('#wake').textContent='Schermo sempre acceso non disponibile'; $('#wake').style.color='#ffb02e'; }
+}
+async function releaseWakeLock(){ try{await wakeLock?.release();}catch{} wakeLock=null; }
+
+function phaseDuration(value=phase){
+  if(value==='prepare') return active.prep;
+  if(value==='exercise') return active.work;
+  if(value==='rest') return active.rest;
+  if(value==='break') return active.brk;
+  return 0;
+}
+function setPhase(value){ phase=value; secondsLeft=phaseDuration(); announced.clear(); draw(); }
+
+function openTimer(workout){
+  active=workout; phase=workout.prep>0?'prepare':'exercise'; round=1; series=1; secondsLeft=phaseDuration(); started=false; announced.clear();
+  $('#home').classList.remove('active'); $('#timer').classList.add('active'); $('#go').textContent='Avvia'; $('#wake').textContent='Schermo attivo: da avviare'; $('#wake').style.color=''; draw();
+}
+
+function run(){
+  ensureAudio(); keepAwake();
+  if(!started){
+    started=true;
+    if(phase==='exercise'){playSound();speak('Go',250);} else if(phase==='prepare') speak('Prepara');
+  }
+  phaseEnd=Date.now()+secondsLeft*1000;
+  clearInterval(timerId); timerId=setInterval(tick,100); $('#go').textContent='Pausa';
+}
+
+function tick(){
+  secondsLeft=Math.max(0,(phaseEnd-Date.now())/1000);
+  const whole=Math.ceil(secondsLeft);
+  if(active.voice && whole>=1 && whole<=3 && !announced.has(whole)){ announced.add(whole); speak(String(whole)); }
+  if(secondsLeft<=0){ clearInterval(timerId); timerId=null; advancePhase(); }
+  draw();
+}
+
+function continueAutomatically(){ setTimeout(()=>{ if($('#timer').classList.contains('active')) run(); },180); }
+function advancePhase(){
+  if(phase==='prepare'){
+    setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); return;
+  }
+  if(phase==='exercise'){
+    playSound(); speak('Stop',250);
+    if(round<active.rounds){
+      if(active.rest>0){ setPhase('rest'); continueAutomatically(); }
+      else { round++; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); }
+      return;
+    }
+    if(series<active.series){
+      if(active.brk>0){ setPhase('break'); speak('Riposo tra serie',650); continueAutomatically(); }
+      else { series++; round=1; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); }
+      return;
+    }
+    finishWorkout(); return;
+  }
+  if(phase==='rest'){
+    round++; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically(); return;
+  }
+  if(phase==='break'){
+    series++; round=1; setPhase('exercise'); playSound(); speak('Go',250); continueAutomatically();
+  }
+}
+
+function finishWorkout(){
+  phase='finished'; secondsLeft=0; clearInterval(timerId); timerId=null; releaseWakeLock(); playSound('electronic'); speak('Allenamento completato',500); $('#go').textContent='Completato'; $('#go').disabled=true; draw();
+}
+
+function nextInfo(){
+  if(phase==='prepare') return ['ALLENAMENTO',active.work,'exercise'];
+  if(phase==='exercise'){
+    if(round<active.rounds) return active.rest>0?['RIPOSO',active.rest,'rest']:['ALLENAMENTO',active.work,'exercise'];
+    if(series<active.series) return active.brk>0?['RIPOSO TRA SERIE',active.brk,'break']:['ALLENAMENTO',active.work,'exercise'];
+    return ['FINE ALLENAMENTO',0,'finished'];
+  }
+  if(phase==='rest'||phase==='break') return ['ALLENAMENTO',active.work,'exercise'];
+  return ['COMPLETATO',0,'finished'];
+}
+
+function draw(){
+  if(!active) return;
+  const labels={prepare:'PREPARAZIONE',exercise:'ALLENAMENTO',rest:'RIPOSO',break:'RIPOSO TRA SERIE',finished:'COMPLETATO'};
+  $('#title').textContent=active.name; $('#phase').textContent=labels[phase]; $('#clock').textContent=formatTime(secondsLeft); $('#current').className='current '+phase;
+  $('#progress').textContent=phase==='finished'?'Ottimo lavoro!':`Serie ${series}/${active.series} · Round ${round}/${active.rounds}`;
+  const next=nextInfo(); $('#nextPhase').textContent=next[0]; $('#nextTime').textContent=formatTime(next[1]); $('#nextBox').className='nextBox next-'+next[2];
+  $('#roundsLeft').textContent=phase==='finished'?0:Math.max(0,active.rounds-round+1); $('#seriesLeft').textContent=phase==='finished'?0:Math.max(0,active.series-series+1); $('#nextBox').classList.toggle('hidden',phase==='finished');
+}
+
+$('#go').addEventListener('click',()=>{
+  ensureAudio();
+  if(timerId){ secondsLeft=Math.max(0,(phaseEnd-Date.now())/1000); clearInterval(timerId); timerId=null; $('#go').textContent='Riprendi'; }
+  else run();
+});
+function resetTimer(){
+  clearInterval(timerId); timerId=null; clearVoice(); releaseWakeLock(); phase=active.prep>0?'prepare':'exercise'; round=1; series=1; secondsLeft=phaseDuration(); started=false; announced.clear(); $('#go').disabled=false; $('#go').textContent='Avvia'; $('#wake').textContent='Schermo attivo: da avviare'; $('#wake').style.color=''; draw();
+}
+$('#reset').addEventListener('click',resetTimer);
+$('#back').addEventListener('click',()=>{ resetTimer(); active=null; $('#timer').classList.remove('active'); $('#home').classList.add('active'); });
+
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && timerId){ keepAwake(); tick(); } });
+window.addEventListener('pagehide',()=>releaseWakeLock());
+
+function setTab(intervalsVisible){
+  $('#intervals').hidden=!intervalsVisible; $('#stopwatch').hidden=intervalsVisible; $('#tabI').classList.toggle('active',intervalsVisible); $('#tabS').classList.toggle('active',!intervalsVisible);
+}
+$('#tabI').addEventListener('click',()=>setTab(true)); $('#tabS').addEventListener('click',()=>setTab(false));
+function drawStopwatch(){
+  const elapsed=stopwatchId?Date.now()-stopwatchStartedAt+stopwatchElapsed:stopwatchElapsed;
+  $('#swtime').textContent=`${String(Math.floor(elapsed/60000)).padStart(2,'0')}:${String(Math.floor(elapsed/1000)%60).padStart(2,'0')}.${String(Math.floor(elapsed/10)%100).padStart(2,'0')}`;
+}
+$('#swgo').addEventListener('click',()=>{
+  if(stopwatchId){ stopwatchElapsed+=Date.now()-stopwatchStartedAt; clearInterval(stopwatchId); stopwatchId=null; $('#swgo').textContent='Avvia'; }
+  else { stopwatchStartedAt=Date.now(); stopwatchId=setInterval(drawStopwatch,40); $('#swgo').textContent='Pausa'; }
+  drawStopwatch();
+});
+$('#swreset').addEventListener('click',()=>{ clearInterval(stopwatchId); stopwatchId=null; stopwatchElapsed=0; $('#swgo').textContent='Avvia'; drawStopwatch(); });
+
+save(); render();
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn)); }
